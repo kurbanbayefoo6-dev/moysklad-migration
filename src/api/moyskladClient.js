@@ -14,7 +14,11 @@ function formatError(error) {
 			error.response.data?.message ||
 			`MoySklad API returned status ${status}`
 
-		return new Error(`${method} ${url} failed: ${message}`)
+		const formattedError = new Error(`${method} ${url} failed: ${message}`)
+		formattedError.responseBody = error.response.data
+		formattedError.status = status
+		formattedError.url = url
+		return formattedError
 	}
 
 	if (error.request) {
