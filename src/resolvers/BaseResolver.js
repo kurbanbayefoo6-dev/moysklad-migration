@@ -52,10 +52,13 @@ export class BaseResolver {
 		this.client = client
 		this.cache = new Map()
 		this.pending = new Map()
+		this.entityLists = new Map()
+		this.entityListPending = new Map()
+		this.strategyIndexes = new Map()
 	}
 
 	createCacheKey(strategyName, value) {
-		return `${strategyName}:${normalizeValue(value).toLowerCase()}`
+		return `${strategyName}:${normalizeValue(value)}`
 	}
 
 	getStrategyValue(strategy, source) {
@@ -87,6 +90,75 @@ export class BaseResolver {
 		return this.repository[strategy.method](value, options)
 	}
 
+	getClientCacheKey(options) {
+		return options.client || this.client
+	}
+
+	async getEntities(options) {
+		const clientCacheKey = this.getClientCacheKey(options)
+		if (this.entityLists.has(clientCacheKey)) {
+			return this.entityLists.get(clientCacheKey)
+		}
+
+		if (this.entityListPending.has(clientCacheKey)) {
+			return this.entityListPending.get(clientCacheKey)
+		}
+
+		const pendingEntities = this.repository.findAll(options)
+		this.entityListPending.set(clientCacheKey, pendingEntities)
+
+		try {
+			const entities = await pendingEntities
+			this.entityLists.set(clientCacheKey, entities)
+			return entities
+		} finally {
+			this.entityListPending.delete(clientCacheKey)
+		}
+	}
+
+	getEntityFieldValue(entity, strategy) {
+		if (strategy.field) {
+			return entity?.[strategy.field]
+		}
+
+		if (typeof strategy.getValue === 'function') {
+			return strategy.getValue(entity)
+		}
+
+		return undefined
+	}
+
+	async getStrategyIndex(strategy, options) {
+		const clientCacheKey = this.getClientCacheKey(options)
+		const indexKey = `${clientCacheKey}:${strategy.name}`
+		if (this.strategyIndexes.has(indexKey)) {
+			return this.strategyIndexes.get(indexKey)
+		}
+
+		const entities = await this.getEntities(options)
+		const index = new Map()
+
+		for (const entity of entities) {
+			const value = this.getEntityFieldValue(entity, strategy)
+			const normalizedValue = normalizeValue(value)
+			if (!normalizedValue) {
+				continue
+			}
+
+			if (!index.has(normalizedValue)) {
+				index.set(normalizedValue, entity)
+			}
+		}
+
+		this.strategyIndexes.set(indexKey, index)
+		return index
+	}
+
+	async lookupCachedStrategy(strategy, value, options) {
+		const index = await this.getStrategyIndex(strategy, options)
+		return index.get(normalizeValue(value)) || null
+	}
+
 	cacheMeta(source, meta) {
 		for (const strategy of this.strategies) {
 			const value = this.getStrategyValue(strategy, source)
@@ -105,7 +177,7 @@ export class BaseResolver {
 			return
 		}
 
-		const normalizedValue = normalizeValue(value).toLowerCase()
+		const normalizedValue = normalizeValue(value)
 		for (const key of this.cache.keys()) {
 			if (key.endsWith(`:${normalizedValue}`)) {
 				this.cache.delete(key)
@@ -116,6 +188,9 @@ export class BaseResolver {
 	clearCache() {
 		this.cache.clear()
 		this.pending.clear()
+		this.entityLists.clear()
+		this.entityListPending.clear()
+		this.strategyIndexes.clear()
 	}
 
 	async resolve(source, options = {}) {
@@ -138,7 +213,7 @@ export class BaseResolver {
 			}
 
 			const pendingResolution = (async () => {
-				const entity = await this.lookupStrategy(
+				const entity = await this.lookupCachedStrategy(
 					strategy,
 					normalizedValue,
 					context,

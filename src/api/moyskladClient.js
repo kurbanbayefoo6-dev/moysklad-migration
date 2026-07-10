@@ -3,6 +3,30 @@ import { config } from '../config/index.js'
 
 const DEFAULT_TIMEOUT = 30000
 
+function redactHeaders(headers = {}) {
+	const redacted = { ...headers }
+	if (redacted.Authorization) {
+		redacted.Authorization = '[REDACTED]'
+	}
+	if (redacted.authorization) {
+		redacted.authorization = '[REDACTED]'
+	}
+	return redacted
+}
+
+function getAxiosDiagnostics(error) {
+	return {
+		message: error.message,
+		code: error.code,
+		method: error.config?.method,
+		url: error.config?.url,
+		baseURL: error.config?.baseURL,
+		params: error.config?.params,
+		data: error.config?.data,
+		headers: redactHeaders(error.config?.headers),
+	}
+}
+
 function formatError(error) {
 	if (error.response) {
 		const status = error.response.status
@@ -16,16 +40,25 @@ function formatError(error) {
 
 		const formattedError = new Error(`${method} ${url} failed: ${message}`)
 		formattedError.responseBody = error.response.data
+		formattedError.responseJson = error.response.data
 		formattedError.status = status
 		formattedError.url = url
+		formattedError.axiosError = getAxiosDiagnostics(error)
+		formattedError.cause = error
 		return formattedError
 	}
 
 	if (error.request) {
-		return new Error('MoySklad API request failed: no response received')
+		const formattedError = new Error('MoySklad API request failed: no response received')
+		formattedError.axiosError = getAxiosDiagnostics(error)
+		formattedError.cause = error
+		return formattedError
 	}
 
-	return new Error(error.message || 'MoySklad API request failed')
+	const formattedError = new Error(error.message || 'MoySklad API request failed')
+	formattedError.axiosError = getAxiosDiagnostics(error)
+	formattedError.cause = error
+	return formattedError
 }
 
 function createHttpClient(token) {

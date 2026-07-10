@@ -1,47 +1,33 @@
 import { shipmentMapper } from '../mappers/shipmentMapper.js'
 import { shipmentService } from '../services/shipmentService.js'
+import {
+	describeShipmentIdentity,
+	shipmentIdentitiesMatch,
+} from '../utils/shipmentIdentity.js'
+import {
+	printApiError,
+	printFinalPayload as printDiagnosticFinalPayload,
+	startShipmentDiagnostics,
+} from '../utils/migrationDiagnostics.js'
 import { validateShipmentPayload } from '../validators/shipmentValidator.js'
 
 function isObject(value) {
 	return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
-function firstDefined(value, fallback = '') {
-	return value === undefined || value === null || value === ''
-		? fallback
-		: value
-}
-
-function getNestedValue(source, path) {
-	let current = source
-	for (const key of path) {
-		if (!isObject(current) && !Array.isArray(current)) {
-			return undefined
-		}
-
-		current = current[key]
-	}
-
-	return current
-}
-
 function pickValue(source, paths, fallback = '') {
 	for (const path of paths) {
-		const value = getNestedValue(source, path)
-		if (value !== undefined && value !== null && value !== '') {
-			return value
+		let current = source
+		for (const key of path) {
+			current = current?.[key]
+		}
+
+		if (current !== undefined && current !== null && current !== '') {
+			return current
 		}
 	}
 
 	return fallback
-}
-
-function getReferenceLabel(reference) {
-	return pickValue(
-		reference,
-		[['name'], ['code'], ['externalCode'], ['meta', 'href']],
-		'Unknown',
-	)
 }
 
 function getShipmentNumber(shipment) {
@@ -52,141 +38,154 @@ function getShipmentNumber(shipment) {
 	)
 }
 
-function getCurrencyValue(shipment) {
+function getReferenceLabel(reference) {
 	return pickValue(
-		shipment,
-		[
-			['rate', 'currency', 'name'],
-			['rate', 'currency', 'code'],
-			['currency', 'name'],
-			['currency', 'code'],
-			['rate', 'name'],
-		],
+		reference,
+		[['name'], ['code'], ['externalCode'], ['meta', 'href']],
 		'Unknown',
 	)
 }
 
-function getTotalSum(shipment) {
-	return pickValue(shipment, [['sum'], ['totalSum'], ['price']], 0)
+function getPositions(shipment) {
+	if (Array.isArray(shipment?.positions)) {
+		return shipment.positions
+	}
+
+	if (Array.isArray(shipment?.positions?.rows)) {
+		return shipment.positions.rows
+	}
+
+	return []
 }
 
-function buildPreviewLines(shipment) {
-	const positions = Array.isArray(shipment.positions) ? shipment.positions : []
-	const products = positions.map(position =>
+function collectOldReferenceStrings(value, references = new Set()) {
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			collectOldReferenceStrings(item, references)
+		}
+		return references
+	}
+
+	if (!isObject(value)) {
+		return references
+	}
+
+	if (value.meta?.href) {
+		references.add(value.meta.href)
+	}
+
+	if (value.id) {
+		references.add(value.id)
+	}
+
+	for (const child of Object.values(value)) {
+		collectOldReferenceStrings(child, references)
+	}
+
+	return references
+}
+
+function findOldReferenceLeaks(value, oldReferences, path = '$', leaks = []) {
+	if (Array.isArray(value)) {
+		value.forEach((item, index) =>
+			findOldReferenceLeaks(item, oldReferences, `${path}[${index}]`, leaks),
+		)
+		return leaks
+	}
+
+	if (!isObject(value)) {
+		if (typeof value === 'string' && oldReferences.has(value)) {
+			leaks.push(`${path}: ${value}`)
+		}
+		return leaks
+	}
+
+	for (const [key, child] of Object.entries(value)) {
+		findOldReferenceLeaks(child, oldReferences, `${path}.${key}`, leaks)
+	}
+
+	return leaks
+}
+
+function validateNoOldReferences(payload, oldShipment) {
+	const oldReferences = collectOldReferenceStrings(oldShipment)
+	const leaks = findOldReferenceLeaks(payload, oldReferences)
+
+	if (leaks.length) {
+		throw new Error(
+			[
+				'Mapped shipment payload still contains OLD account references:',
+				...leaks,
+			].join('\n'),
+		)
+	}
+}
+
+function buildPreviewLines(oldShipment, payload, existingShipment = null) {
+	const products = getPositions(payload).map(position =>
 		getReferenceLabel(position.assortment),
 	)
 
 	return [
-		`Shipment Number: ${getShipmentNumber(shipment)}`,
-		`Moment: ${firstDefined(shipment.moment, 'Unknown')}`,
-		`Counterparty: ${getReferenceLabel(shipment.counterparty)}`,
-		`Organization: ${getReferenceLabel(shipment.organization)}`,
-		`Warehouse: ${getReferenceLabel(shipment.store)}`,
-		`Number of positions: ${positions.length}`,
+		`Shipment Number: ${getShipmentNumber(payload)}`,
+		`Moment: ${payload?.moment || ''}`,
+		`Counterparty: ${getReferenceLabel(payload?.agent)}`,
+		`Organization: ${getReferenceLabel(payload?.organization)}`,
+		`Warehouse: ${getReferenceLabel(payload?.store)}`,
 		`Products: ${products.length ? products.join(', ') : 'None'}`,
-		`Currency: ${getCurrencyValue(shipment)}`,
-		`Total Sum: ${getTotalSum(shipment)}`,
+		`Comment: ${oldShipment?.description || ''}`,
+		`Duplicate detected: ${existingShipment ? 'YES' : 'NO'}`,
+		existingShipment
+			? 'Duplicate reason: moment, organization, counterparty, warehouse, total and product set match'
+			: 'Duplicate reason: no full identity match found',
+		'Identity:',
+		describeShipmentIdentity(payload),
 	]
 }
 
-function printPreview(shipment) {
-	console.log('--- Shipment Migration Preview ---')
-	for (const line of buildPreviewLines(shipment)) {
-		console.log(line)
-	}
+function printPreview(oldShipment, payload, existingShipment = null) {
+	buildPreviewLines(oldShipment, payload, existingShipment)
 }
 
 function printFinalPayload(payload) {
-	console.log('--- Final Payload ---')
-	console.log(JSON.stringify(payload, null, 2))
+	printDiagnosticFinalPayload(payload)
 }
 
 function printCreatedShipment(createdShipment, shipmentNumber) {
-	console.log('Shipment created')
-	console.log(
-		`New Shipment ID: ${createdShipment?.id || createdShipment?.meta?.href || 'Unknown'}`,
-	)
-	console.log(`Shipment Number: ${shipmentNumber}`)
+	return { createdShipment, shipmentNumber }
 }
 
 function printCreationError(error) {
-	const body =
-		error?.responseBody ||
-		error?.response?.data ||
-		error?.data ||
-		error?.body ||
-		error?.message ||
-		'Unknown error'
-
-	console.log('Shipment creation failed')
-	console.error(JSON.stringify(body, null, 2))
-}
-
-const STRIP_FIELDS = new Set([
-	'owner',
-	'group',
-	'created',
-	'updated',
-	'accountId',
-	'id',
-	'meta',
-	'files',
-	'buyPrice',
-	'salePrices',
-	'minPrice',
-	'currency',
-])
-
-const RELATION_FIELDS = new Set([
-	'agent',
-	'organization',
-	'store',
-	'contract',
-	'project',
-	'counterparty',
-	'assortment',
-])
-
-function shouldPreserveMeta(path) {
-	return path.some(part => RELATION_FIELDS.has(part))
-}
-
-function sanitizePayload(value, path = []) {
-	if (Array.isArray(value)) {
-		return value.map((item, index) => sanitizePayload(item, [...path, index]))
-	}
-
-	if (!isObject(value)) {
-		return value
-	}
-
-	if (path.includes('agent')) {
-		return value.meta
-			? { meta: sanitizePayload(value.meta, [...path, 'meta']) }
-			: {}
-	}
-
-	const sanitized = {}
-	for (const [key, childValue] of Object.entries(value)) {
-		if (STRIP_FIELDS.has(key)) {
-			if (key === 'meta' && shouldPreserveMeta(path)) {
-				sanitized[key] = sanitizePayload(childValue, [...path, key])
-			}
-			continue
-		}
-
-		sanitized[key] = sanitizePayload(childValue, [...path, key])
-	}
-
-	return sanitized
+	printApiError(error)
 }
 
 async function fetchOldShipment(oldShipmentId, shipmentServiceInstance) {
 	return shipmentServiceInstance.getById(oldShipmentId, { client: 'old' })
 }
 
-async function mapShipment(oldShipment, mapper) {
-	return mapper.map(oldShipment)
+async function findExistingShipment(payload, shipmentServiceInstance) {
+	if (!payload?.moment) {
+		return null
+	}
+
+	const candidates =
+		typeof shipmentServiceInstance.findAllByMoment === 'function'
+			? await shipmentServiceInstance.findAllByMoment(payload.moment, {
+					client: 'new',
+					params: {
+						expand:
+							'organization,store,agent,counterparty,positions.assortment',
+					},
+				})
+			: []
+
+	for (const candidate of candidates.filter(Boolean)) {
+		if (shipmentIdentitiesMatch(candidate, payload)) {
+			return candidate
+		}
+	}
+
+	return null
 }
 
 async function createNewShipment(payload, shipmentServiceInstance) {
@@ -211,10 +210,23 @@ export async function migrateOneShipment(
 		oldShipmentId,
 		shipmentServiceInstance,
 	)
-	const payload = await mapShipment(oldShipment, shipmentMapperInstance)
+	startShipmentDiagnostics(oldShipment, oldShipmentId)
+	const payload = await shipmentMapperInstance.map(oldShipment)
+	const identityPayload = {
+		...payload,
+		sum: oldShipment?.sum,
+		description: oldShipment?.description,
+	}
+
 	validator(payload)
+	validateNoOldReferences(payload, oldShipment)
+
+	const existingShipment = dryRun
+		? null
+		: await findExistingShipment(identityPayload, shipmentServiceInstance)
+
 	if (!silent) {
-		printPreview(payload)
+		printPreview(oldShipment, identityPayload, existingShipment)
 	}
 
 	if (dryRun) {
@@ -222,42 +234,48 @@ export async function migrateOneShipment(
 			printFinalPayload(payload)
 		}
 		return {
+			status: 'dry-run',
 			success: true,
+			skipped: false,
+			created: false,
 			oldShipmentId,
 			newShipmentId: null,
 			shipmentNumber: getShipmentNumber(payload),
 		}
 	}
 
+	if (existingShipment) {
+		return {
+			success: true,
+			skipped: true,
+			created: false,
+			shipmentNumber: getShipmentNumber(payload),
+			oldShipmentId,
+			newShipmentId: existingShipment.id,
+		}
+	}
+
 	let createdShipment
 	try {
-		if (!dryRun && !silent) {
-			console.log('Creating shipment...')
-		}
-		const sanitizedPayload = sanitizePayload(payload)
-		if (!silent) {
-			console.log('Final payload.agent')
-			console.log(JSON.stringify(sanitizedPayload.agent ?? null, null, 2))
-		}
-		createdShipment = await createNewShipment(
-			sanitizedPayload,
-			shipmentServiceInstance,
-		)
+		printFinalPayload(payload)
+
+		createdShipment = await createNewShipment(payload, shipmentServiceInstance)
 	} catch (error) {
 		printCreationError(error)
 		throw error
 	}
 
 	if (!silent) {
-		console.log('Shipment created successfully')
 		printCreatedShipment(createdShipment, getShipmentNumber(payload))
 	}
 
 	return {
 		success: true,
+		skipped: false,
+		created: true,
+		shipmentNumber: getShipmentNumber(payload),
 		oldShipmentId,
 		newShipmentId: createdShipment?.id || createdShipment?.meta?.href || null,
-		shipmentNumber: getShipmentNumber(payload),
 	}
 }
 

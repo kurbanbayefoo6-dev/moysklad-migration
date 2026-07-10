@@ -6,24 +6,11 @@ function getOrganizationField(organization, field) {
 }
 
 function printOldOrganizationDebug(organization) {
-	console.log('OLD Organization:')
-	console.log(`- id: ${getOrganizationField(organization, 'id')}`)
-	console.log(`- name: ${getOrganizationField(organization, 'name')}`)
-	console.log(
-		`- externalCode: ${getOrganizationField(organization, 'externalCode')}`,
-	)
-	console.log(`- meta.href: ${organization?.meta?.href || 'Unknown'}`)
+	return organization
 }
 
 function printNewOrganizationDebug(organizations) {
-	console.log('NEW Organizations:')
-	for (const organization of organizations) {
-		console.log(`- id: ${getOrganizationField(organization, 'id')}`)
-		console.log(`  name: ${getOrganizationField(organization, 'name')}`)
-		console.log(
-			`  externalCode: ${getOrganizationField(organization, 'externalCode')}`,
-		)
-	}
+	return organizations
 }
 
 export class OrganizationResolver extends BaseResolver {
@@ -49,8 +36,9 @@ export class OrganizationResolver extends BaseResolver {
 		} catch (error) {
 			if (error instanceof EntityNotFoundError) {
 				printOldOrganizationDebug(source)
-				const newOrganizations = await this.repository.findAll({
-					client: 'new',
+				const newOrganizations = await this.getEntities({
+					...options,
+					client: options.client || this.client,
 				})
 				printNewOrganizationDebug(newOrganizations)
 			}

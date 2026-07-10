@@ -52,12 +52,16 @@ export class BaseRepository {
 		return path ? `${this.endpoint}/${path}` : this.endpoint
 	}
 
-	async paginate(client, { params = {}, pageSize = this.pageSize } = {}) {
+	async paginate(
+		client,
+		{ endpoint = this.endpoint, params = {}, pageSize = this.pageSize } = {},
+	) {
 		const items = []
 		let offset = 0
+		let total
 
 		for (;;) {
-			const response = await client.get(this.endpoint, {
+			const response = await client.get(endpoint, {
 				params: {
 					...params,
 					limit: pageSize,
@@ -68,16 +72,23 @@ export class BaseRepository {
 			const pageItems = normalizeItems(response)
 			items.push(...pageItems)
 
-			const total = response?.meta?.size
+			if (typeof response?.meta?.size === 'number') {
+				total = response.meta.size
+			}
+
 			if (typeof total === 'number' && items.length >= total) {
 				break
 			}
 
-			if (pageItems.length < pageSize) {
+			const nextOffset = offset + pageSize
+			if (
+				pageItems.length < pageSize &&
+				(typeof total !== 'number' || nextOffset >= total)
+			) {
 				break
 			}
 
-			offset += pageSize
+			offset = nextOffset
 		}
 
 		return items

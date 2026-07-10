@@ -6,6 +6,10 @@
 	"scripts": {
 		"start": "node src/index.js",
 		"debug:shipments": "node src/debugShipments.js",
+		"cleanup:shipments": "node src/scripts/cleanupNewShipments.js",
+		"verify:migration": "node src/scripts/verifyMigration.js",
+		"compare:shipments": "node src/scripts/compareShipments.js",
+		"migrate:products": "node src/migrations/migrateAllProducts.js",
 		"test": "echo \"Error: no test specified\" && exit 1"
 	},
 	"keywords": [],

@@ -18,6 +18,25 @@ export class ShipmentService {
 			params: options.params,
 		})
 	}
+
+	async findAllByMoment(moment, options = {}) {
+		if (!moment) {
+			return []
+		}
+
+		const filter = [`moment=${moment}`]
+		if (options.params?.filter) {
+			filter.push(options.params.filter)
+		}
+
+		const client = this.repository.resolveClient(options.client || 'new')
+		return this.repository.paginate(client, {
+			params: {
+				...options.params,
+				filter: filter.join(';'),
+			},
+		})
+	}
 }
 
 export const shipmentService = new ShipmentService()
