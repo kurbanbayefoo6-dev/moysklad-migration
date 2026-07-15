@@ -1,7 +1,7 @@
 import { newClient } from '../api/newClient.js'
 import { oldClient } from '../api/oldClient.js'
 
-const METADATA_ENDPOINT = 'entity/demand/metadata'
+const DEFAULT_METADATA_ENDPOINT = 'entity/demand/metadata'
 
 function getReferenceHref(source) {
 	return source?.meta?.href || source?.href || ''
@@ -30,9 +30,11 @@ export class StateResolver {
 	constructor({
 		oldStateClient = oldClient,
 		newStateClient = newClient,
+		metadataEndpoint = DEFAULT_METADATA_ENDPOINT,
 	} = {}) {
 		this.oldStateClient = oldStateClient
 		this.newStateClient = newStateClient
+		this.metadataEndpoint = metadataEndpoint
 		this.oldStates = null
 		this.newStates = null
 		this.oldStatesPending = null
@@ -40,7 +42,7 @@ export class StateResolver {
 	}
 
 	async loadStates(client) {
-		const response = await client.get(METADATA_ENDPOINT)
+		const response = await client.get(this.metadataEndpoint)
 		return Array.isArray(response?.states) ? response.states : []
 	}
 

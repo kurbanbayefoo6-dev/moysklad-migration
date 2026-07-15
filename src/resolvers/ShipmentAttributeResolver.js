@@ -1,7 +1,7 @@
 import { newClient } from '../api/newClient.js'
 import { oldClient } from '../api/oldClient.js'
 
-const ATTRIBUTES_ENDPOINT = 'entity/demand/metadata/attributes'
+const DEFAULT_ATTRIBUTES_ENDPOINT = 'entity/demand/metadata/attributes'
 
 function normalizeItems(response) {
 	if (Array.isArray(response?.rows)) {
@@ -34,15 +34,17 @@ export class ShipmentAttributeResolver {
 	constructor({
 		oldAttributeClient = oldClient,
 		newAttributeClient = newClient,
+		attributesEndpoint = DEFAULT_ATTRIBUTES_ENDPOINT,
 	} = {}) {
 		this.oldAttributeClient = oldAttributeClient
 		this.newAttributeClient = newAttributeClient
+		this.attributesEndpoint = attributesEndpoint
 		this.oldAttributes = null
 		this.newAttributes = null
 	}
 
 	async loadAttributes(client) {
-		return normalizeItems(await client.get(ATTRIBUTES_ENDPOINT))
+		return normalizeItems(await client.get(this.attributesEndpoint))
 	}
 
 	async getOldAttributes() {

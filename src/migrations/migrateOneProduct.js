@@ -17,11 +17,11 @@ async function findExistingProduct(product, repository) {
 		}
 	}
 
-	if (product.code) {
+	if (product.code && product.name) {
 		const existingProduct = await repository.findByCode(product.code, {
 			client: 'new',
 		})
-		if (existingProduct) {
+		if (existingProduct?.name === product.name) {
 			return existingProduct
 		}
 	}
